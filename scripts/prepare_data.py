@@ -20,9 +20,11 @@ Output YOLO format:
     ├── images/
     │   ├── train/
     │   └── val/
-    └── labels/
+    ├── labels/
         ├── train/
         └── val/
+    ├── manifest.jsonl
+    └── drone.yaml
 
 Usage:
     # Extract and convert full dataset
@@ -39,6 +41,8 @@ Author: Anti-UAV Project
 
 import argparse
 import json
+import math
+import shutil
 import sys
 from pathlib import Path
 
@@ -56,8 +60,16 @@ def parse_annotation_json(json_path: Path) -> dict:
         "gt_rect": [[x, y, w, h], [x, y, w, h], ...]  # bounding boxes
     }
     """
-    with open(json_path) as f:
+    with open(json_path, encoding="utf-8") as f:
         data = json.load(f)
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Annotation must be a JSON object: {json_path}")
+    for field in ("exist", "gt_rect"):
+        if field not in data:
+            raise ValueError(f"Annotation is missing '{field}': {json_path}")
+        if not isinstance(data[field], list):
+            raise ValueError(f"Annotation field '{field}' must be a list: {json_path}")
     return data
 
 
@@ -67,23 +79,35 @@ def bbox_to_yolo(bbox: list[float], img_width: int, img_height: int) -> str | No
 
     YOLO format uses normalized coordinates (0-1).
     """
-    x, y, w, h = bbox
-
-    # Skip invalid boxes
-    if w <= 0 or h <= 0:
+    if img_width <= 0 or img_height <= 0:
+        raise ValueError("Image dimensions must be positive")
+    if len(bbox) != 4:
         return None
 
-    # Convert to center coordinates
-    x_center = (x + w / 2) / img_width
-    y_center = (y + h / 2) / img_height
-    norm_w = w / img_width
-    norm_h = h / img_height
+    try:
+        x, y, w, h = (float(value) for value in bbox)
+    except (TypeError, ValueError):
+        return None
 
-    # Clamp to [0, 1]
-    x_center = max(0, min(1, x_center))
-    y_center = max(0, min(1, y_center))
-    norm_w = max(0, min(1, norm_w))
-    norm_h = max(0, min(1, norm_h))
+    # Skip invalid boxes
+    if not all(math.isfinite(value) for value in (x, y, w, h)) or w <= 0 or h <= 0:
+        return None
+
+    # Clip the box geometry to the image before normalizing. Clamping each normalized
+    # value independently can otherwise describe a box that never existed.
+    x1 = max(0.0, x)
+    y1 = max(0.0, y)
+    x2 = min(float(img_width), x + w)
+    y2 = min(float(img_height), y + h)
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    clipped_width = x2 - x1
+    clipped_height = y2 - y1
+    x_center = (x1 + clipped_width / 2) / img_width
+    y_center = (y1 + clipped_height / 2) / img_height
+    norm_w = clipped_width / img_width
+    norm_h = clipped_height / img_height
 
     # Class 0 = drone
     return f"0 {x_center:.6f} {y_center:.6f} {norm_w:.6f} {norm_h:.6f}"
@@ -98,6 +122,7 @@ def extract_frames_with_annotations(
     modality: str,
     sample_rate: int = 1,
     max_frames: int | None = None,
+    manifest_records: list[dict[str, object]] | None = None,
 ) -> tuple[int, int]:
     """
     Extract frames from video and create YOLO label files.
@@ -105,20 +130,34 @@ def extract_frames_with_annotations(
     Returns:
         (num_frames_extracted, num_frames_with_objects)
     """
+    if sample_rate <= 0:
+        raise ValueError("sample_rate must be greater than zero")
+    if max_frames is not None and max_frames <= 0:
+        raise ValueError("max_frames must be greater than zero when provided")
+
     # Parse annotations
     annotations = parse_annotation_json(json_path)
-    exist_flags = annotations.get("exist", [])
-    gt_rects = annotations.get("gt_rect", [])
+    exist_flags = annotations["exist"]
+    gt_rects = annotations["gt_rect"]
 
     # Open video
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        print(f"  ⚠️  Could not open video: {video_path}")
-        return 0, 0
+        raise RuntimeError(f"Could not open video: {video_path}")
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     img_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     img_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if img_width <= 0 or img_height <= 0:
+        cap.release()
+        raise RuntimeError(f"Video reports invalid dimensions: {video_path}")
+
+    if len(exist_flags) != total_frames or len(gt_rects) != total_frames:
+        print(
+            "  ⚠️  Annotation/video length mismatch for "
+            f"{sequence_name}/{modality}: video={total_frames}, "
+            f"exist={len(exist_flags)}, gt_rect={len(gt_rects)}"
+        )
 
     # Ensure output directories exist
     output_images_dir.mkdir(parents=True, exist_ok=True)
@@ -139,7 +178,7 @@ def extract_frames_with_annotations(
             continue
 
         # Max frames limit
-        if max_frames and frames_extracted >= max_frames:
+        if max_frames is not None and frames_extracted >= max_frames:
             break
 
         # Generate filename
@@ -147,25 +186,52 @@ def extract_frames_with_annotations(
 
         # Save image
         img_path = output_images_dir / f"{filename}.jpg"
-        cv2.imwrite(str(img_path), frame)
+        if not cv2.imwrite(str(img_path), frame):
+            cap.release()
+            raise RuntimeError(f"Could not write image: {img_path}")
 
         # Create label file
         label_path = output_labels_dir / f"{filename}.txt"
 
         # Check if object exists in this frame
         has_object = False
-        if frame_idx < len(exist_flags) and exist_flags[frame_idx] == 1:
-            if frame_idx < len(gt_rects):
-                bbox = gt_rects[frame_idx]
-                yolo_line = bbox_to_yolo(bbox, img_width, img_height)
-                if yolo_line:
-                    has_object = True
-                    with open(label_path, "w") as f:
-                        f.write(yolo_line + "\n")
+        target_present: bool | None = None
+        source_bbox: object = gt_rects[frame_idx] if frame_idx < len(gt_rects) else None
+        annotation_status = "missing_exist"
+
+        if frame_idx < len(exist_flags):
+            target_present = exist_flags[frame_idx] == 1
+            annotation_status = "absent"
+            if target_present:
+                annotation_status = "missing_bbox"
+                if isinstance(source_bbox, list):
+                    yolo_line = bbox_to_yolo(source_bbox, img_width, img_height)
+                    annotation_status = "invalid_bbox"
+                    if yolo_line:
+                        has_object = True
+                        annotation_status = "present"
+                        label_path.write_text(yolo_line + "\n", encoding="utf-8")
 
         # Create empty label file if no object (optional for YOLO)
         if not has_object:
-            label_path.write_text("")
+            label_path.write_text("", encoding="utf-8")
+
+        if manifest_records is not None:
+            output_root = output_images_dir.parent.parent
+            manifest_records.append(
+                {
+                    "annotation_status": annotation_status,
+                    "image": img_path.relative_to(output_root).as_posix(),
+                    "label": label_path.relative_to(output_root).as_posix(),
+                    "label_written": has_object,
+                    "modality": modality,
+                    "sequence": sequence_name,
+                    "source_bbox_xywh": source_bbox,
+                    "source_frame": frame_idx,
+                    "split": output_images_dir.name,
+                    "target_present": target_present,
+                }
+            )
 
         frames_extracted += 1
         if has_object:
@@ -184,12 +250,13 @@ def process_split(
     modality: str,
     sample_rate: int,
     max_frames_per_sequence: int | None,
+    manifest_records: list[dict[str, object]] | None = None,
 ) -> dict:
     """Process all sequences in a split (train/val/test)."""
     split_dir = input_dir / split
     if not split_dir.exists():
         print(f"  ⚠️  Split directory not found: {split_dir}")
-        return {"sequences": 0, "frames": 0, "objects": 0}
+        return {"sequences": 0, "frames": 0, "objects": 0, "absent": 0, "invalid": 0}
 
     # Get all sequence directories
     sequences = sorted([d for d in split_dir.iterdir() if d.is_dir()])
@@ -200,6 +267,8 @@ def process_split(
 
     total_frames = 0
     total_objects = 0
+    split_records = manifest_records if manifest_records is not None else []
+    first_record = len(split_records)
 
     for seq_dir in tqdm(sequences, desc=f"  Processing {split}"):
         # Determine video and annotation files based on modality
@@ -229,6 +298,7 @@ def process_split(
                         mod,
                         sample_rate,
                         max_frames_per_sequence,
+                        split_records,
                     )
                     total_frames += frames
                     total_objects += objects
@@ -245,13 +315,60 @@ def process_split(
                 mod_name,
                 sample_rate,
                 max_frames_per_sequence,
+                split_records,
             )
             total_frames += frames
             total_objects += objects
         else:
             print(f"  ⚠️  Missing files in {seq_dir.name}")
 
-    return {"sequences": len(sequences), "frames": total_frames, "objects": total_objects}
+    new_records = split_records[first_record:]
+    absent = sum(record["annotation_status"] == "absent" for record in new_records)
+    invalid = sum(
+        record["annotation_status"] in {"invalid_bbox", "missing_bbox", "missing_exist"}
+        for record in new_records
+    )
+    return {
+        "sequences": len(sequences),
+        "frames": total_frames,
+        "objects": total_objects,
+        "absent": absent,
+        "invalid": invalid,
+    }
+
+
+def write_manifest(output_dir: Path, records: list[dict[str, object]]) -> Path:
+    """Write deterministic JSON Lines metadata linking samples to source frames."""
+    manifest_path = output_dir / "manifest.jsonl"
+    content = "".join(json.dumps(record, sort_keys=True) + "\n" for record in records)
+    manifest_path.write_text(content, encoding="utf-8")
+    return manifest_path
+
+
+def prepare_output(output_dir: Path, overwrite: bool) -> None:
+    """Reject stale derived data, or explicitly remove the whole derived dataset."""
+    derived_paths = [
+        output_dir / "images",
+        output_dir / "labels",
+        output_dir / "manifest.jsonl",
+        output_dir / "drone.yaml",
+    ]
+    existing = [path for path in derived_paths if path.exists()]
+    if existing and not overwrite:
+        formatted = "\n  ".join(str(path) for path in existing)
+        raise FileExistsError(
+            "Prepared output already exists. Choose another --output or pass --overwrite:\n  "
+            + formatted
+        )
+
+    if overwrite:
+        for path in existing:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
 
 
 def create_dataset_yaml(output_dir: Path, dataset_name: str = "drone") -> Path:
@@ -271,7 +388,7 @@ names: ['drone']
 # Generated from Anti-UAV-RGBT dataset
 """
     yaml_path = output_dir / f"{dataset_name}.yaml"
-    yaml_path.write_text(yaml_content)
+    yaml_path.write_text(yaml_content, encoding="utf-8")
     return yaml_path
 
 
@@ -313,8 +430,14 @@ def main():
     parser.add_argument(
         "--splits",
         nargs="+",
+        choices=["train", "val", "test"],
         default=["train", "val"],
         help="Which splits to process (default: train val)",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace the derived dataset (source videos are never removed)",
     )
 
     args = parser.parse_args()
@@ -327,6 +450,11 @@ def main():
     print(f"  Modality:    {args.modality}")
     print(f"  Sample rate: every {args.sample_rate} frames")
     print(f"  Splits:      {', '.join(args.splits)}")
+
+    if args.sample_rate <= 0:
+        parser.error("--sample-rate must be greater than zero")
+    if args.max_frames is not None and args.max_frames <= 0:
+        parser.error("--max-frames must be greater than zero")
 
     # Check input exists
     if not args.input.exists():
@@ -347,15 +475,33 @@ def main():
             print(f"   Also tried: {zip_path}")
             sys.exit(1)
 
+    missing_splits = [args.input / split for split in args.splits if not (args.input / split).is_dir()]
+    if missing_splits:
+        formatted = "\n  ".join(str(path) for path in missing_splits)
+        raise FileNotFoundError("Requested dataset splits are missing:\n  " + formatted)
+
+    prepare_output(args.output, args.overwrite)
+
     # Process each split
     stats = {}
+    manifest_records: list[dict[str, object]] = []
     for split in args.splits:
         stats[split] = process_split(
-            args.input, args.output, split, args.modality, args.sample_rate, args.max_frames
+            args.input,
+            args.output,
+            split,
+            args.modality,
+            args.sample_rate,
+            args.max_frames,
+            manifest_records,
         )
+
+    if not manifest_records:
+        raise RuntimeError("No frames were prepared; check the requested splits and modality")
 
     # Create dataset YAML
     yaml_path = create_dataset_yaml(args.output)
+    manifest_path = write_manifest(args.output, manifest_records)
 
     # Print summary
     print("\n" + "=" * 60)
@@ -368,12 +514,15 @@ def main():
         print(f"    Sequences: {s['sequences']}")
         print(f"    Frames:    {s['frames']}")
         print(f"    With UAV:  {s['objects']}")
+        print(f"    Absent:    {s['absent']}")
+        print(f"    Invalid:   {s['invalid']}")
         total_frames += s["frames"]
         total_objects += s["objects"]
 
     print(f"\n  Total frames:  {total_frames}")
     print(f"  Total with UAV: {total_objects}")
     print(f"  Dataset YAML:  {yaml_path}")
+    print(f"  Source manifest: {manifest_path}")
 
     print("\n" + "=" * 60)
     print("✅ Data preparation complete!")

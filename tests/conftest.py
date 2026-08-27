@@ -9,7 +9,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
-import torch
 import yaml
 
 
@@ -20,8 +19,10 @@ def project_root() -> Path:
 
 
 @pytest.fixture(scope="session")
-def device() -> torch.device:
+def device():
     """Return the best available device (CUDA if available, else CPU)."""
+    import torch
+
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 

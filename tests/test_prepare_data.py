@@ -5,6 +5,7 @@ Tests the data preparation functions that convert Anti-UAV dataset to YOLO forma
 """
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -13,7 +14,14 @@ import pytest
 # Add scripts to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from prepare_data import bbox_to_yolo, parse_annotation_json
+from prepare_data import (
+    bbox_to_yolo,
+    create_dataset_yaml,
+    parse_annotation_json,
+    prepare_output,
+    process_split,
+    write_manifest,
+)
 
 
 class TestBboxToYolo:
@@ -53,7 +61,7 @@ class TestBboxToYolo:
         assert abs(y_center - 0.5) < 0.0001
 
     def test_edge_box(self):
-        """Test box at image edge (should be clamped)."""
+        """Test box at image edge is geometrically clipped."""
         # Box partially outside image
         result = bbox_to_yolo([600, 450, 100, 100], 640, 480)
 
@@ -63,11 +71,14 @@ class TestBboxToYolo:
         width = float(parts[3])
         height = float(parts[4])
 
-        # Values should be clamped to [0, 1]
-        assert 0 <= x_center <= 1
-        assert 0 <= y_center <= 1
-        assert 0 <= width <= 1
-        assert 0 <= height <= 1
+        assert x_center == pytest.approx(620 / 640)
+        assert y_center == pytest.approx(465 / 480)
+        assert width == pytest.approx(40 / 640)
+        assert height == pytest.approx(30 / 480)
+
+    def test_box_completely_outside_image(self):
+        """Test that a box without image intersection is rejected."""
+        assert bbox_to_yolo([700, 500, 20, 20], 640, 480) is None
 
     def test_invalid_zero_width(self):
         """Test that zero-width box returns None."""
@@ -86,6 +97,11 @@ class TestBboxToYolo:
 
         result = bbox_to_yolo([100, 100, 50, -10], 640, 480)
         assert result is None
+
+    def test_invalid_image_dimensions(self):
+        """Test that unusable video dimensions fail clearly."""
+        with pytest.raises(ValueError, match="dimensions"):
+            bbox_to_yolo([100, 100, 50, 50], 0, 480)
 
     def test_small_box(self):
         """Test very small bounding box (typical for distant drones)."""
@@ -163,6 +179,14 @@ class TestParseAnnotationJson:
         with pytest.raises(FileNotFoundError):
             parse_annotation_json(temp_dir / "nonexistent.json")
 
+    def test_parse_missing_required_field(self, temp_dir):
+        """Test that malformed source annotations are not silently accepted."""
+        json_path = temp_dir / "missing_gt.json"
+        json_path.write_text('{"exist": [1]}', encoding="utf-8")
+
+        with pytest.raises(ValueError, match="gt_rect"):
+            parse_annotation_json(json_path)
+
 
 class TestDataPipelineIntegration:
     """Integration tests for the data preparation pipeline."""
@@ -228,3 +252,142 @@ class TestDataPipelineIntegration:
 
         # 10 frames / 5 = 2 frames
         assert frames_extracted == 2
+
+    def test_invalid_sample_rate(self, mock_video_dataset, temp_dir):
+        """Test that zero cannot reach the frame modulo operation."""
+        from prepare_data import extract_frames_with_annotations
+
+        sequence = mock_video_dataset / "train" / "test_sequence"
+        with pytest.raises(ValueError, match="sample_rate"):
+            extract_frames_with_annotations(
+                video_path=sequence / "infrared.mp4",
+                json_path=sequence / "infrared.json",
+                output_images_dir=temp_dir / "images" / "train",
+                output_labels_dir=temp_dir / "labels" / "train",
+                sequence_name="test_sequence",
+                modality="ir",
+                sample_rate=0,
+            )
+
+    def test_absent_target_has_empty_label_and_manifest_record(
+        self, mock_video_dataset, temp_dir
+    ):
+        """Test that source absence survives the derived empty YOLO label."""
+        from prepare_data import extract_frames_with_annotations
+
+        sequence = mock_video_dataset / "train" / "test_sequence"
+        json_path = sequence / "infrared.json"
+        annotations = json.loads(json_path.read_text(encoding="utf-8"))
+        annotations["exist"][1] = 0
+        annotations["gt_rect"][1] = [0, 0, 0, 0]
+        json_path.write_text(json.dumps(annotations), encoding="utf-8")
+
+        output_images = temp_dir / "output" / "images" / "train"
+        output_labels = temp_dir / "output" / "labels" / "train"
+        records = []
+        frames, objects = extract_frames_with_annotations(
+            video_path=sequence / "infrared.mp4",
+            json_path=json_path,
+            output_images_dir=output_images,
+            output_labels_dir=output_labels,
+            sequence_name="test_sequence",
+            modality="ir",
+            manifest_records=records,
+        )
+
+        assert frames == 10
+        assert objects == 9
+        assert (output_labels / "test_sequence_ir_000001.txt").read_text() == ""
+        assert records[1]["target_present"] is False
+        assert records[1]["annotation_status"] == "absent"
+        assert records[1]["source_frame"] == 1
+        assert records[1]["source_bbox_xywh"] == [0, 0, 0, 0]
+
+    def test_train_val_outputs_and_yaml(self, mock_video_dataset, temp_dir):
+        """Test split separation and the generated detector data contract."""
+        shutil.copytree(mock_video_dataset / "train", mock_video_dataset / "val")
+        output = temp_dir / "prepared"
+        records = []
+
+        for split in ("train", "val"):
+            stats = process_split(
+                mock_video_dataset,
+                output,
+                split,
+                "ir",
+                sample_rate=5,
+                max_frames_per_sequence=None,
+                manifest_records=records,
+            )
+            assert stats["frames"] == 2
+
+        yaml_path = create_dataset_yaml(output)
+        assert len(list((output / "images" / "train").glob("*.jpg"))) == 2
+        assert len(list((output / "images" / "val").glob("*.jpg"))) == 2
+        assert "train: images/train" in yaml_path.read_text(encoding="utf-8")
+        assert "val: images/val" in yaml_path.read_text(encoding="utf-8")
+        assert {record["split"] for record in records} == {"train", "val"}
+
+    def test_both_modalities_are_preserved(self, mock_video_dataset, temp_dir):
+        """Test the existing IR/RGB combined path."""
+        sequence = mock_video_dataset / "train" / "test_sequence"
+        shutil.copy2(sequence / "infrared.mp4", sequence / "visible.mp4")
+        shutil.copy2(sequence / "infrared.json", sequence / "visible.json")
+        records = []
+
+        stats = process_split(
+            mock_video_dataset,
+            temp_dir / "prepared",
+            "train",
+            "both",
+            sample_rate=1,
+            max_frames_per_sequence=None,
+            manifest_records=records,
+        )
+
+        assert stats["frames"] == 20
+        assert stats["objects"] == 20
+        assert {record["modality"] for record in records} == {"ir", "rgb"}
+
+
+class TestPreparedArtifacts:
+    """Tests for deterministic derived-output handling."""
+
+    def test_manifest_is_deterministic_jsonl(self, temp_dir):
+        records = [
+            {
+                "sequence": "seq",
+                "source_frame": 0,
+                "target_present": False,
+            }
+        ]
+        first = write_manifest(temp_dir, records).read_text(encoding="utf-8")
+        second = write_manifest(temp_dir, records).read_text(encoding="utf-8")
+
+        assert first == second
+        assert json.loads(first) == records[0]
+
+    def test_stale_output_requires_explicit_overwrite(self, temp_dir):
+        output = temp_dir / "prepared"
+        derived = output / "images" / "train"
+        derived.mkdir(parents=True)
+        (derived / "stale.jpg").write_text("stale", encoding="utf-8")
+        source_video = temp_dir / "infrared.mp4"
+        source_video.write_text("source", encoding="utf-8")
+
+        with pytest.raises(FileExistsError, match="--overwrite"):
+            prepare_output(output, overwrite=False)
+
+        prepare_output(output, overwrite=True)
+        assert not derived.exists()
+        assert source_video.read_text(encoding="utf-8") == "source"
+
+    def test_overwrite_removes_unselected_stale_split(self, temp_dir):
+        output = temp_dir / "prepared"
+        stale_val = output / "labels" / "val" / "stale.txt"
+        stale_val.parent.mkdir(parents=True)
+        stale_val.write_text("stale", encoding="utf-8")
+
+        prepare_output(output, overwrite=True)
+
+        assert not (output / "labels").exists()
