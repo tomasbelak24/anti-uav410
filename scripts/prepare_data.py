@@ -2,16 +2,15 @@
 """
 Anti-UAV Data Preparation Script
 =================================
-Converts Anti-UAV dataset (videos + JSON annotations) to YOLO format.
+Converts Anti-UAV video or JPEG sequences with JSON annotations to YOLO format.
 
 The Anti-UAV dataset structure:
     Anti-UAV-RGBT/
     ├── train/
     │   └── <sequence_name>/
-    │       ├── infrared.mp4
-    │       ├── infrared.json (annotations)
-    │       ├── visible.mp4
-    │       └── visible.json (annotations)
+    │       ├── infrared.mp4 + infrared.json, or
+    │       ├── 000001.jpg ... + IR_label.json
+    │       └── visible.mp4 + visible.json (optional)
     ├── val/
     └── test/
 
@@ -113,6 +112,65 @@ def bbox_to_yolo(bbox: list[float], img_width: int, img_height: int) -> str | No
     return f"0 {x_center:.6f} {y_center:.6f} {norm_w:.6f} {norm_h:.6f}"
 
 
+def write_label_and_manifest(
+    *,
+    frame_idx: int,
+    img_width: int,
+    img_height: int,
+    img_path: Path,
+    label_path: Path,
+    exist_flags: list,
+    gt_rects: list,
+    sequence_name: str,
+    modality: str,
+    source_layout: str,
+    source_image: str | None,
+    manifest_records: list[dict[str, object]] | None,
+) -> bool:
+    """Write one YOLO label and preserve its Anti-UAV source semantics."""
+    has_object = False
+    target_present: bool | None = None
+    source_bbox: object = gt_rects[frame_idx] if frame_idx < len(gt_rects) else None
+    annotation_status = "missing_exist"
+
+    if frame_idx < len(exist_flags):
+        target_present = exist_flags[frame_idx] == 1
+        annotation_status = "absent"
+        if target_present:
+            annotation_status = "missing_bbox"
+            if isinstance(source_bbox, list):
+                yolo_line = bbox_to_yolo(source_bbox, img_width, img_height)
+                annotation_status = "invalid_bbox"
+                if yolo_line:
+                    has_object = True
+                    annotation_status = "present"
+                    label_path.write_text(yolo_line + "\n", encoding="utf-8")
+
+    if not has_object:
+        label_path.write_text("", encoding="utf-8")
+
+    if manifest_records is not None:
+        output_root = img_path.parent.parent.parent
+        record: dict[str, object] = {
+            "annotation_status": annotation_status,
+            "image": img_path.relative_to(output_root).as_posix(),
+            "label": label_path.relative_to(output_root).as_posix(),
+            "label_written": has_object,
+            "modality": modality,
+            "sequence": sequence_name,
+            "source_bbox_xywh": source_bbox,
+            "source_frame": frame_idx,
+            "source_layout": source_layout,
+            "split": img_path.parent.name,
+            "target_present": target_present,
+        }
+        if source_image is not None:
+            record["source_image"] = source_image
+        manifest_records.append(record)
+
+    return has_object
+
+
 def extract_frames_with_annotations(
     video_path: Path,
     json_path: Path,
@@ -190,48 +248,21 @@ def extract_frames_with_annotations(
             cap.release()
             raise RuntimeError(f"Could not write image: {img_path}")
 
-        # Create label file
         label_path = output_labels_dir / f"{filename}.txt"
-
-        # Check if object exists in this frame
-        has_object = False
-        target_present: bool | None = None
-        source_bbox: object = gt_rects[frame_idx] if frame_idx < len(gt_rects) else None
-        annotation_status = "missing_exist"
-
-        if frame_idx < len(exist_flags):
-            target_present = exist_flags[frame_idx] == 1
-            annotation_status = "absent"
-            if target_present:
-                annotation_status = "missing_bbox"
-                if isinstance(source_bbox, list):
-                    yolo_line = bbox_to_yolo(source_bbox, img_width, img_height)
-                    annotation_status = "invalid_bbox"
-                    if yolo_line:
-                        has_object = True
-                        annotation_status = "present"
-                        label_path.write_text(yolo_line + "\n", encoding="utf-8")
-
-        # Create empty label file if no object (optional for YOLO)
-        if not has_object:
-            label_path.write_text("", encoding="utf-8")
-
-        if manifest_records is not None:
-            output_root = output_images_dir.parent.parent
-            manifest_records.append(
-                {
-                    "annotation_status": annotation_status,
-                    "image": img_path.relative_to(output_root).as_posix(),
-                    "label": label_path.relative_to(output_root).as_posix(),
-                    "label_written": has_object,
-                    "modality": modality,
-                    "sequence": sequence_name,
-                    "source_bbox_xywh": source_bbox,
-                    "source_frame": frame_idx,
-                    "split": output_images_dir.name,
-                    "target_present": target_present,
-                }
-            )
+        has_object = write_label_and_manifest(
+            frame_idx=frame_idx,
+            img_width=img_width,
+            img_height=img_height,
+            img_path=img_path,
+            label_path=label_path,
+            exist_flags=exist_flags,
+            gt_rects=gt_rects,
+            sequence_name=sequence_name,
+            modality=modality,
+            source_layout="video",
+            source_image=None,
+            manifest_records=manifest_records,
+        )
 
         frames_extracted += 1
         if has_object:
@@ -241,6 +272,82 @@ def extract_frames_with_annotations(
 
     cap.release()
     return frames_extracted, frames_with_objects
+
+
+def prepare_jpeg_sequence(
+    sequence_dir: Path,
+    json_path: Path,
+    output_images_dir: Path,
+    output_labels_dir: Path,
+    sample_rate: int = 1,
+    max_frames: int | None = None,
+    manifest_records: list[dict[str, object]] | None = None,
+) -> tuple[int, int]:
+    """Copy sampled Anti-UAV JPEG frames and create YOLO labels."""
+    if sample_rate <= 0:
+        raise ValueError("sample_rate must be greater than zero")
+    if max_frames is not None and max_frames <= 0:
+        raise ValueError("max_frames must be greater than zero when provided")
+
+    annotations = parse_annotation_json(json_path)
+    exist_flags = annotations["exist"]
+    gt_rects = annotations["gt_rect"]
+    images = sorted(
+        path
+        for path in sequence_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
+    )
+
+    if len(images) != len(exist_flags) or len(images) != len(gt_rects):
+        raise ValueError(
+            "JPEG/annotation length mismatch for "
+            f"{sequence_dir.name}: images={len(images)}, "
+            f"exist={len(exist_flags)}, gt_rect={len(gt_rects)}"
+        )
+
+    output_images_dir.mkdir(parents=True, exist_ok=True)
+    output_labels_dir.mkdir(parents=True, exist_ok=True)
+
+    frames_prepared = 0
+    frames_with_objects = 0
+    for frame_idx, source_path in enumerate(images):
+        if frame_idx % sample_rate != 0:
+            continue
+        if max_frames is not None and frames_prepared >= max_frames:
+            break
+
+        image = cv2.imread(str(source_path), cv2.IMREAD_UNCHANGED)
+        if image is None:
+            raise RuntimeError(f"Could not read image: {source_path}")
+        img_height, img_width = image.shape[:2]
+
+        filename = f"{sequence_dir.name}_ir_{frame_idx:06d}"
+        img_path = output_images_dir / f"{filename}.jpg"
+        label_path = output_labels_dir / f"{filename}.txt"
+        shutil.copy2(source_path, img_path)
+
+        source_image = (
+            Path(output_images_dir.name) / sequence_dir.name / source_path.name
+        ).as_posix()
+        has_object = write_label_and_manifest(
+            frame_idx=frame_idx,
+            img_width=img_width,
+            img_height=img_height,
+            img_path=img_path,
+            label_path=label_path,
+            exist_flags=exist_flags,
+            gt_rects=gt_rects,
+            sequence_name=sequence_dir.name,
+            modality="ir",
+            source_layout="jpeg",
+            source_image=source_image,
+            manifest_records=manifest_records,
+        )
+        frames_prepared += 1
+        if has_object:
+            frames_with_objects += 1
+
+    return frames_prepared, frames_with_objects
 
 
 def process_split(
@@ -256,7 +363,17 @@ def process_split(
     split_dir = input_dir / split
     if not split_dir.exists():
         print(f"  ⚠️  Split directory not found: {split_dir}")
-        return {"sequences": 0, "frames": 0, "objects": 0, "absent": 0, "invalid": 0}
+        return {
+            "sequences": 0,
+            "processed": 0,
+            "skipped": 0,
+            "video_sources": 0,
+            "jpeg_sources": 0,
+            "frames": 0,
+            "objects": 0,
+            "absent": 0,
+            "invalid": 0,
+        }
 
     # Get all sequence directories
     sequences = sorted([d for d in split_dir.iterdir() if d.is_dir()])
@@ -267,60 +384,84 @@ def process_split(
 
     total_frames = 0
     total_objects = 0
+    processed_sequences = 0
+    video_sources = 0
+    jpeg_sources = 0
     split_records = manifest_records if manifest_records is not None else []
     first_record = len(split_records)
 
     for seq_dir in tqdm(sequences, desc=f"  Processing {split}"):
-        # Determine video and annotation files based on modality
-        if modality in ["ir", "infrared", "thermal"]:
-            video_file = seq_dir / "infrared.mp4"
-            json_file = seq_dir / "infrared.json"
-            mod_name = "ir"
-        elif modality in ["rgb", "visible"]:
-            video_file = seq_dir / "visible.mp4"
-            json_file = seq_dir / "visible.json"
-            mod_name = "rgb"
-        else:
-            # Both modalities
-            for mod, vid, ann in [
-                ("ir", "infrared.mp4", "infrared.json"),
-                ("rgb", "visible.mp4", "visible.json"),
-            ]:
-                v_path = seq_dir / vid
-                a_path = seq_dir / ann
-                if v_path.exists() and a_path.exists():
-                    frames, objects = extract_frames_with_annotations(
-                        v_path,
-                        a_path,
-                        output_images,
-                        output_labels,
-                        seq_dir.name,
-                        mod,
-                        sample_rate,
-                        max_frames_per_sequence,
-                        split_records,
-                    )
-                    total_frames += frames
-                    total_objects += objects
-            continue
+        sequence_processed = False
 
-        # Single modality processing
-        if video_file.exists() and json_file.exists():
-            frames, objects = extract_frames_with_annotations(
-                video_file,
-                json_file,
-                output_images,
-                output_labels,
-                seq_dir.name,
-                mod_name,
-                sample_rate,
-                max_frames_per_sequence,
-                split_records,
+        if modality in {"ir", "infrared", "thermal", "both"}:
+            video_path = seq_dir / "infrared.mp4"
+            annotation_path = seq_dir / "infrared.json"
+            jpeg_annotation_path = seq_dir / "IR_label.json"
+            jpeg_images = any(
+                path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
+                for path in seq_dir.iterdir()
             )
-            total_frames += frames
-            total_objects += objects
-        else:
-            print(f"  ⚠️  Missing files in {seq_dir.name}")
+
+            if video_path.is_file() and annotation_path.is_file():
+                frames, objects = extract_frames_with_annotations(
+                    video_path,
+                    annotation_path,
+                    output_images,
+                    output_labels,
+                    seq_dir.name,
+                    "ir",
+                    sample_rate,
+                    max_frames_per_sequence,
+                    split_records,
+                )
+                video_sources += 1
+                sequence_processed = True
+                total_frames += frames
+                total_objects += objects
+            elif jpeg_images and jpeg_annotation_path.is_file():
+                frames, objects = prepare_jpeg_sequence(
+                    seq_dir,
+                    jpeg_annotation_path,
+                    output_images,
+                    output_labels,
+                    sample_rate,
+                    max_frames_per_sequence,
+                    split_records,
+                )
+                jpeg_sources += 1
+                sequence_processed = True
+                total_frames += frames
+                total_objects += objects
+            else:
+                print(
+                    f"  ⚠️  Skipping {seq_dir.name}/ir: expected "
+                    "infrared.mp4 + infrared.json or JPEG files + IR_label.json"
+                )
+
+        if modality in {"rgb", "visible", "both"}:
+            video_path = seq_dir / "visible.mp4"
+            annotation_path = seq_dir / "visible.json"
+            if video_path.is_file() and annotation_path.is_file():
+                frames, objects = extract_frames_with_annotations(
+                    video_path,
+                    annotation_path,
+                    output_images,
+                    output_labels,
+                    seq_dir.name,
+                    "rgb",
+                    sample_rate,
+                    max_frames_per_sequence,
+                    split_records,
+                )
+                video_sources += 1
+                sequence_processed = True
+                total_frames += frames
+                total_objects += objects
+            else:
+                print(f"  ⚠️  Skipping {seq_dir.name}/rgb: expected visible.mp4 + visible.json")
+
+        if sequence_processed:
+            processed_sequences += 1
 
     new_records = split_records[first_record:]
     absent = sum(record["annotation_status"] == "absent" for record in new_records)
@@ -330,6 +471,10 @@ def process_split(
     )
     return {
         "sequences": len(sequences),
+        "processed": processed_sequences,
+        "skipped": len(sequences) - processed_sequences,
+        "video_sources": video_sources,
+        "jpeg_sources": jpeg_sources,
         "frames": total_frames,
         "objects": total_objects,
         "absent": absent,
@@ -437,7 +582,7 @@ def main():
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Replace the derived dataset (source videos are never removed)",
+        help="Replace the derived dataset (source videos/images are never removed)",
     )
 
     args = parser.parse_args()
@@ -475,7 +620,9 @@ def main():
             print(f"   Also tried: {zip_path}")
             sys.exit(1)
 
-    missing_splits = [args.input / split for split in args.splits if not (args.input / split).is_dir()]
+    missing_splits = [
+        args.input / split for split in args.splits if not (args.input / split).is_dir()
+    ]
     if missing_splits:
         formatted = "\n  ".join(str(path) for path in missing_splits)
         raise FileNotFoundError("Requested dataset splits are missing:\n  " + formatted)
@@ -511,11 +658,15 @@ def main():
     total_objects = 0
     for split, s in stats.items():
         print(f"\n  {split}:")
-        print(f"    Sequences: {s['sequences']}")
-        print(f"    Frames:    {s['frames']}")
-        print(f"    With UAV:  {s['objects']}")
-        print(f"    Absent:    {s['absent']}")
-        print(f"    Invalid:   {s['invalid']}")
+        print(f"    Sequences discovered: {s['sequences']}")
+        print(f"    Sequences processed:  {s['processed']}")
+        print(f"    Sequences skipped:    {s['skipped']}")
+        print(f"    Video sources:        {s['video_sources']}")
+        print(f"    JPEG sources:         {s['jpeg_sources']}")
+        print(f"    Frames:               {s['frames']}")
+        print(f"    With UAV:             {s['objects']}")
+        print(f"    Absent:               {s['absent']}")
+        print(f"    Invalid:              {s['invalid']}")
         total_frames += s["frames"]
         total_objects += s["objects"]
 
@@ -529,7 +680,8 @@ def main():
     print("\nNext steps:")
     print(f"  1. Verify images in: {args.output / 'images'}")
     print(f"  2. Verify labels in: {args.output / 'labels'}")
-    print(f"  3. Train with: python scripts/train.py --data {yaml_path}")
+    print(f"  3. Inspect source metadata in: {manifest_path}")
+    print("  Modern detector training is introduced in milestone M2.")
     print("=" * 60 + "\n")
 
 

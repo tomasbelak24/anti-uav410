@@ -185,7 +185,7 @@ generic multi-object tracking.
 
 | Flow | Entry point and dependencies | Coupling | Tests | Expected artifacts |
 |---|---|---|---|---|
-| Data preparation | `scripts/prepare_data.py`; stdlib JSON/ZIP, OpenCV, tqdm | YOLO text/YAML output only | `tests/test_prepare_data.py` | source `infrared.mp4`/`.json` (optionally visible); derived images, labels, YAML, manifest |
+| Data preparation | `scripts/prepare_data.py`; stdlib JSON/ZIP, OpenCV, tqdm | YOLO text/YAML output only | `tests/test_prepare_data.py` | source `infrared.mp4`/`.json`, JPEG + `IR_label.json`, optionally visible video; derived images, labels, YAML, manifest |
 | Detector training | `scripts/train.py`; Torch plus copied `src/detection/models` and `utils` | hard `sys.path` injection and legacy YOLOv5 internals | `tests/test_training_smoke.py` exercises the different `Codes/detect_wrapper` copy, not this entry point | pretrained `.pt`; `last.pt`, `best.pt`, run metrics |
 | Inference | `scripts/infer.py`; Torch/OpenCV plus copied `src/detection` loaders, NMS, plotting | hard legacy YOLOv5 coupling | no entry-point test | default `weights/best.pt`; annotated run output |
 | Detector validation/export | `scripts/evaluate.py`, `scripts/export.py`; Torch plus `src/detection` | hard legacy model/checkpoint and graph coupling | no entry-point tests | defaults differ (`best_drone.pt` vs `weights/best.pt`); metrics and TorchScript/ONNX/CoreML artifacts |
@@ -287,12 +287,18 @@ This logic should not be rewritten merely because the detector framework changes
 
 ### 5.2 Data-source semantics
 
-The near-term Colab archive is the user-verified Google Drive file
-`1F0nGafdWP4PddmqVDLFNpHmukEFRpX8Y`. Its extracted directory and filenames match the
-current RGBT converter contract (`train`/`val`, sequence directories,
-`infrared.mp4` + `infrared.json`, with the stated visible equivalents). This verified
-project archive contract should not be confused with every public distribution bearing
-the Anti-UAV410 name.
+Two Colab source archives have been verified by the user:
+
+- `1F0nGafdWP4PddmqVDLFNpHmukEFRpX8Y` matches the RGBT video contract
+  (`infrared.mp4` + `infrared.json`, with the stated visible equivalents);
+- `1VZFq7g-z5-k0VEkGLKW2i29RzGd47dRD` extracts with `train` and `val` directly at its
+  root and contains both video sequences and benchmark-style IR sequences made of
+  numbered JPEGs plus `IR_label.json`.
+
+`scripts/prepare_data.py` accepts both IR representations per sequence. It prefers a
+complete video/annotation pair if both representations are present, otherwise it uses
+the JPEG representation. This project contract should not be confused with every
+public distribution bearing the Anti-UAV410 name.
 
 The Anti-UAV domain representation contains more information than YOLO labels.
 
@@ -729,9 +735,8 @@ A future `notebooks/colab_train.ipynb` should contain:
 1. GPU/environment check;
 2. clone this GitHub repository;
 3. dependency installation;
-4. download the verified archive with `gdown` and file ID
-   `1F0nGafdWP4PddmqVDLFNpHmukEFRpX8Y`;
-5. extract to `/content` while preserving source videos;
+4. select and download one of the verified archives with `gdown`;
+5. extract to `/content` while preserving source videos and JPEGs;
 6. path/config selection;
 7. call to data preparation;
 8. call to training;

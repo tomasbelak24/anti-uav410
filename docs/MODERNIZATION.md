@@ -196,6 +196,9 @@ Corrections carried into M1-M6:
 - the user-verified Colab archive is Google Drive file
   `1F0nGafdWP4PddmqVDLFNpHmukEFRpX8Y`, is publicly downloadable with `gdown`, and
   matches the current RGBT filename/layout contract;
+- real-data M1 verification also identified Google Drive file
+  `1VZFq7g-z5-k0VEkGLKW2i29RzGd47dRD`, whose root contains `train`/`val` and whose
+  sequences mix the RGBT video layout with numbered JPEGs plus `IR_label.json`;
 - source videos must remain available after preparation for later video inference;
 - an empty YOLO label cannot distinguish source absence from invalid/missing metadata,
   so the M1 source manifest is required;
@@ -253,6 +256,7 @@ At minimum:
 - `gt_rect`;
 - bbox conversion;
 - IR processing;
+- benchmark JPEG + `IR_label.json` processing;
 - existing RGB/both capability if currently supported;
 - train/validation split handling;
 - `sample_rate=5` workflow;
@@ -274,6 +278,8 @@ Candidates:
 5. summary counts for frames, present targets, absent targets;
 6. a small JSON Lines source manifest that preserves split, sequence, source frame,
    modality, source presence, source box, generated paths, and annotation status.
+7. automatic per-sequence selection between complete IR video and JPEG layouts;
+8. separate discovered, processed, skipped, video-source, and JPEG-source counts.
 
 The manifest is required because empty detector labels alone lose the distinction
 between true target absence and invalid or missing annotations.
@@ -289,6 +295,7 @@ annotation parser reads exist + gt_rect
 bbox conversion produces correct normalized values
 invalid/empty bbox is handled
 sample_rate is respected
+JPEG frame order remains aligned with IR_label.json
 target-present frame creates label
 target-absent frame does not create a false positive label
 train/val output locations are distinct
@@ -318,7 +325,7 @@ M1 passes when:
 - the core behavior is covered by lightweight tests;
 - a small local fixture can be prepared;
 - reruns cannot silently mix stale derived outputs;
-- source videos remain untouched by preparation and explicit overwrite handling;
+- source videos and JPEGs remain untouched by preparation and explicit overwrite handling;
 - no detector/tracker subsystem was rewritten.
 
 ## Delete gate
@@ -727,7 +734,7 @@ Recommended sequence:
 2. clone the GitHub repository
 3. install project/dependencies in the active Colab kernel
 4. install/use `gdown`
-5. download Google Drive file `1F0nGafdWP4PddmqVDLFNpHmukEFRpX8Y`
+5. select a verified source archive and download it with `gdown`
 6. extract the verified archive to `/content`
 7. define dataset + output paths
 8. run dataset preparation without removing source videos
@@ -772,7 +779,7 @@ storage is practical.
 ## Source acquisition
 
 The supported M6 workflow clones the GitHub repository. Dataset acquisition is separate:
-use `gdown` with the verified public file ID above, rather than embedding Drive download
+use `gdown` with an explicitly selected verified file ID, rather than embedding Drive download
 logic inside the repository's data converter.
 
 ## Required smoke test

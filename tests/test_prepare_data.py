@@ -18,6 +18,7 @@ from prepare_data import (
     bbox_to_yolo,
     create_dataset_yaml,
     parse_annotation_json,
+    prepare_jpeg_sequence,
     prepare_output,
     process_split,
     write_manifest,
@@ -269,9 +270,7 @@ class TestDataPipelineIntegration:
                 sample_rate=0,
             )
 
-    def test_absent_target_has_empty_label_and_manifest_record(
-        self, mock_video_dataset, temp_dir
-    ):
+    def test_absent_target_has_empty_label_and_manifest_record(self, mock_video_dataset, temp_dir):
         """Test that source absence survives the derived empty YOLO label."""
         from prepare_data import extract_frames_with_annotations
 
@@ -302,6 +301,112 @@ class TestDataPipelineIntegration:
         assert records[1]["annotation_status"] == "absent"
         assert records[1]["source_frame"] == 1
         assert records[1]["source_bbox_xywh"] == [0, 0, 0, 0]
+        assert records[1]["source_layout"] == "video"
+
+    def test_jpeg_sequence_sampling_and_manifest(self, mock_jpeg_dataset, temp_dir):
+        """Test the benchmark JPEG layout without importing legacy tooling."""
+        sequence = mock_jpeg_dataset / "train" / "jpeg_sequence"
+        output_images = temp_dir / "prepared" / "images" / "train"
+        output_labels = temp_dir / "prepared" / "labels" / "train"
+        records = []
+
+        frames, objects = prepare_jpeg_sequence(
+            sequence,
+            sequence / "IR_label.json",
+            output_images,
+            output_labels,
+            sample_rate=5,
+            manifest_records=records,
+        )
+
+        assert frames == 2
+        assert objects == 2
+        assert sorted(path.name for path in output_images.glob("*.jpg")) == [
+            "jpeg_sequence_ir_000000.jpg",
+            "jpeg_sequence_ir_000005.jpg",
+        ]
+        assert (output_images / "jpeg_sequence_ir_000000.jpg").read_bytes() == (
+            sequence / "000001.jpg"
+        ).read_bytes()
+        assert [record["source_frame"] for record in records] == [0, 5]
+        assert records[0]["source_layout"] == "jpeg"
+        assert records[0]["source_image"] == "train/jpeg_sequence/000001.jpg"
+
+    def test_jpeg_absence_and_max_frames(self, mock_jpeg_dataset, temp_dir):
+        """Test that JPEG source absence produces an empty detector label."""
+        sequence = mock_jpeg_dataset / "train" / "jpeg_sequence"
+        output = temp_dir / "prepared"
+        records = []
+
+        frames, objects = prepare_jpeg_sequence(
+            sequence,
+            sequence / "IR_label.json",
+            output / "images" / "train",
+            output / "labels" / "train",
+            max_frames=2,
+            manifest_records=records,
+        )
+
+        assert frames == 2
+        assert objects == 1
+        assert (output / "labels/train/jpeg_sequence_ir_000001.txt").read_text() == ""
+        assert records[1]["annotation_status"] == "absent"
+        assert records[1]["target_present"] is False
+
+    def test_jpeg_annotation_mismatch_fails(self, mock_jpeg_dataset, temp_dir):
+        """Test that JPEG frames cannot silently shift against annotations."""
+        sequence = mock_jpeg_dataset / "train" / "jpeg_sequence"
+        annotations = json.loads((sequence / "IR_label.json").read_text(encoding="utf-8"))
+        annotations["exist"].pop()
+        (sequence / "IR_label.json").write_text(json.dumps(annotations), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="length mismatch"):
+            prepare_jpeg_sequence(
+                sequence,
+                sequence / "IR_label.json",
+                temp_dir / "prepared/images/train",
+                temp_dir / "prepared/labels/train",
+            )
+
+    def test_unreadable_jpeg_fails(self, mock_jpeg_dataset, temp_dir):
+        """Test that corrupt source images are reported instead of copied."""
+        sequence = mock_jpeg_dataset / "train" / "jpeg_sequence"
+        (sequence / "000001.jpg").write_bytes(b"not a jpeg")
+
+        with pytest.raises(RuntimeError, match="Could not read image"):
+            prepare_jpeg_sequence(
+                sequence,
+                sequence / "IR_label.json",
+                temp_dir / "prepared/images/train",
+                temp_dir / "prepared/labels/train",
+            )
+
+    def test_mixed_video_and_jpeg_sequences_are_processed(
+        self, mock_video_dataset, mock_jpeg_dataset, temp_dir
+    ):
+        """Test automatic layout selection and honest sequence accounting."""
+        unlabeled = temp_dir / "train" / "unlabelled_jpeg"
+        unlabeled.mkdir()
+        shutil.copy2(temp_dir / "train/jpeg_sequence/000001.jpg", unlabeled / "000001.jpg")
+        records = []
+
+        stats = process_split(
+            temp_dir,
+            temp_dir / "prepared",
+            "train",
+            "ir",
+            sample_rate=5,
+            max_frames_per_sequence=None,
+            manifest_records=records,
+        )
+
+        assert stats["sequences"] == 3
+        assert stats["processed"] == 2
+        assert stats["skipped"] == 1
+        assert stats["video_sources"] == 1
+        assert stats["jpeg_sources"] == 1
+        assert stats["frames"] == 4
+        assert {record["source_layout"] for record in records} == {"video", "jpeg"}
 
     def test_train_val_outputs_and_yaml(self, mock_video_dataset, temp_dir):
         """Test split separation and the generated detector data contract."""

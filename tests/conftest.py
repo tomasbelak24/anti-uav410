@@ -2,6 +2,7 @@
 Pytest fixtures for Anti-UAV test suite.
 """
 
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -178,8 +179,6 @@ def mock_video_dataset(temp_dir) -> Path:
     out.release()
 
     # Create annotation JSON
-    import json
-
     annotations = {
         "exist": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
         "gt_rect": [[100 + i * 40 - 10, 200 + i * 20 - 10, 20, 20] for i in range(10)],
@@ -189,4 +188,33 @@ def mock_video_dataset(temp_dir) -> Path:
     with open(json_path, "w") as f:
         json.dump(annotations, f)
 
+    return temp_dir
+
+
+@pytest.fixture(scope="function")
+def mock_jpeg_dataset(temp_dir) -> Path:
+    """Create a tiny Anti-UAV JPEG + IR_label.json sequence."""
+    seq_dir = temp_dir / "train" / "jpeg_sequence"
+    seq_dir.mkdir(parents=True)
+
+    for frame_idx in reversed(range(10)):
+        frame = np.zeros((80, 100), dtype=np.uint8) + frame_idx
+        cv2.imwrite(str(seq_dir / f"{frame_idx + 1:06d}.jpg"), frame)
+
+    annotations = {
+        "exist": [1, 0, 1, 1, 1, 1, 1, 1, 1, 1],
+        "gt_rect": [
+            [10, 20, 30, 20],
+            [],
+            [10, 20, 30, 20],
+            [10, 20, 30, 20],
+            [10, 20, 30, 20],
+            [10, 20, 30, 20],
+            [10, 20, 30, 20],
+            [10, 20, 30, 20],
+            [10, 20, 30, 20],
+            [10, 20, 30, 20],
+        ],
+    }
+    (seq_dir / "IR_label.json").write_text(json.dumps(annotations), encoding="utf-8")
     return temp_dir
