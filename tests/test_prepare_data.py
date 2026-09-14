@@ -7,6 +7,7 @@ Tests the data preparation functions that convert Anti-UAV dataset to YOLO forma
 import json
 import shutil
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from prepare_data import (
     prepare_jpeg_sequence,
     prepare_output,
     process_split,
+    resolve_dataset_root,
     write_manifest,
 )
 
@@ -187,6 +189,68 @@ class TestParseAnnotationJson:
 
         with pytest.raises(ValueError, match="gt_rect"):
             parse_annotation_json(json_path)
+
+
+class TestDatasetRootResolution:
+    """Tests for the verified root-level RGBT ZIP layout."""
+
+    def test_extracts_root_level_archive_into_requested_directory(self, temp_dir):
+        archive_path = temp_dir / "Anti-UAV-RGBT.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("train/sequence/infrared.json", "{}")
+            archive.writestr("val/sequence/infrared.json", "{}")
+
+        input_dir = temp_dir / "raw"
+        resolved = resolve_dataset_root(input_dir, ["train", "val"])
+
+        assert resolved == input_dir
+        assert (input_dir / "train/sequence/infrared.json").is_file()
+        assert archive_path.is_file()
+
+    def test_accepts_zip_path_and_reuses_its_extracted_root(self, temp_dir):
+        archive_path = temp_dir / "Anti-UAV-RGBT.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("train/sequence/infrared.json", "{}")
+            archive.writestr("val/sequence/infrared.json", "{}")
+
+        first = resolve_dataset_root(archive_path, ["train", "val"])
+        second = resolve_dataset_root(archive_path, ["train", "val"])
+
+        assert first == archive_path.with_suffix("")
+        assert second == first
+
+    def test_resolves_single_archive_wrapper_directory(self, temp_dir):
+        archive_path = temp_dir / "Anti-UAV-RGBT.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("Anti-UAV-RGBT/train/sequence/infrared.json", "{}")
+            archive.writestr("Anti-UAV-RGBT/val/sequence/infrared.json", "{}")
+
+        input_dir = temp_dir / "raw"
+        resolved = resolve_dataset_root(input_dir, ["train", "val"])
+
+        assert resolved == input_dir / "Anti-UAV-RGBT"
+
+    def test_resolves_legacy_parent_extraction(self, temp_dir):
+        extracted_root = temp_dir / "raw"
+        (extracted_root / "train").mkdir(parents=True)
+        (extracted_root / "val").mkdir()
+
+        resolved = resolve_dataset_root(extracted_root / "Anti-UAV-RGBT", ["train", "val"])
+
+        assert resolved == extracted_root
+
+    def test_refuses_to_merge_archive_with_unrelated_files(self, temp_dir):
+        archive_path = temp_dir / "Anti-UAV-RGBT.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("train/sequence/infrared.json", "{}")
+            archive.writestr("val/sequence/infrared.json", "{}")
+
+        input_dir = temp_dir / "raw"
+        input_dir.mkdir()
+        (input_dir / "other-dataset.txt").write_text("keep", encoding="utf-8")
+
+        with pytest.raises(FileExistsError, match="Refusing to merge"):
+            resolve_dataset_root(input_dir, ["train", "val"])
 
 
 class TestDataPipelineIntegration:

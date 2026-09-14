@@ -196,9 +196,16 @@ Corrections carried into M1-M6:
 - the user-verified Colab archive is Google Drive file
   `1F0nGafdWP4PddmqVDLFNpHmukEFRpX8Y`, is publicly downloadable with `gdown`, and
   matches the current RGBT filename/layout contract;
-- real-data M1 verification also identified Google Drive file
-  `1VZFq7g-z5-k0VEkGLKW2i29RzGd47dRD`, whose root contains `train`/`val` and whose
-  sequences mix the RGBT video layout with numbered JPEGs plus `IR_label.json`;
+- real-data M1 verification locally audited the 5.6 GB `Anti-UAV-RGBT.zip` associated
+  with Google Drive file `1VZFq7g-z5-k0VEkGLKW2i29RzGd47dRD`: it has root-level
+  `train`/`val`/`test` splits containing 160/67/91 video-only RGBT sequences;
+- the separate legacy Anti-UAV410 benchmark layout uses numbered JPEGs plus
+  `IR_label.json`; JPEG compatibility is useful but is not part of the audited RGBT ZIP;
+- archives must be extracted into a fresh directory because extraction does not remove
+  stale files and can otherwise create a misleading mixed dataset tree;
+- all audited IR annotation arrays align, but 179 train, 72 validation, and 43 test
+  frames contain the contradictory combination `exist=1` and a zero-size box; M1 keeps
+  those distinct from genuine absence through `annotation_status=invalid_bbox`;
 - source videos must remain available after preparation for later video inference;
 - an empty YOLO label cannot distinguish source absence from invalid/missing metadata,
   so the M1 source manifest is required;
@@ -280,6 +287,7 @@ Candidates:
    modality, source presence, source box, generated paths, and annotation status.
 7. automatic per-sequence selection between complete IR video and JPEG layouts;
 8. separate discovered, processed, skipped, video-source, and JPEG-source counts.
+9. root-level/singly-wrapped ZIP detection and refusal to merge with unrelated files.
 
 The manifest is required because empty detector labels alone lose the distinction
 between true target absence and invalid or missing annotations.
@@ -324,6 +332,7 @@ M1 passes when:
 - existing intended data-preparation behavior is still available;
 - the core behavior is covered by lightweight tests;
 - a small local fixture can be prepared;
+- the verified root-level ZIP layout resolves without a manual path search;
 - reruns cannot silently mix stale derived outputs;
 - source videos and JPEGs remain untouched by preparation and explicit overwrite handling;
 - no detector/tracker subsystem was rewritten.
@@ -734,8 +743,8 @@ Recommended sequence:
 2. clone the GitHub repository
 3. install project/dependencies in the active Colab kernel
 4. install/use `gdown`
-5. select a verified source archive and download it with `gdown`
-6. extract the verified archive to `/content`
+5. download the selected source archive with `gdown`
+6. extract the archive to a fresh directory under `/content`
 7. define dataset + output paths
 8. run dataset preparation without removing source videos
 9. run a 1-epoch training smoke test
@@ -787,7 +796,7 @@ logic inside the repository's data converter.
 A **fresh Colab GPU runtime** should demonstrate:
 
 - project/dependencies install;
-- public archive download succeeds using the recorded `gdown` file ID;
+- public archive download succeeds using the selected recorded `gdown` file ID;
 - data path resolves;
 - source videos remain available after preparation;
 - prepared data is usable;

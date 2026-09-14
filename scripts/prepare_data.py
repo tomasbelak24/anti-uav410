@@ -26,6 +26,9 @@ Output YOLO format:
     └── drone.yaml
 
 Usage:
+    # Extract a downloaded ZIP and convert it
+    python scripts/prepare_data.py --input data/Anti-UAV-RGBT.zip --output data/processed
+
     # Extract and convert full dataset
     python scripts/prepare_data.py --input data/raw/Anti-UAV-RGBT --output data/processed
 
@@ -42,11 +45,88 @@ import argparse
 import json
 import math
 import shutil
-import sys
+import zipfile
 from pathlib import Path
 
 import cv2
 from tqdm import tqdm
+
+
+def has_requested_splits(root: Path, splits: list[str]) -> bool:
+    """Return whether root directly contains every requested dataset split."""
+    return root.is_dir() and all((root / split).is_dir() for split in splits)
+
+
+def find_dataset_root(base_dir: Path, splits: list[str]) -> Path | None:
+    """Find a dataset root at base_dir or one directory below it."""
+    if has_requested_splits(base_dir, splits):
+        return base_dir
+    if not base_dir.is_dir():
+        return None
+
+    candidates = sorted(path for path in base_dir.iterdir() if has_requested_splits(path, splits))
+    if len(candidates) > 1:
+        formatted = "\n  ".join(str(path) for path in candidates)
+        raise ValueError(f"Multiple dataset roots found under {base_dir}:\n  {formatted}")
+    return candidates[0] if candidates else None
+
+
+def resolve_dataset_root(input_path: Path, splits: list[str]) -> Path:
+    """Resolve or extract an Anti-UAV archive and return its split root."""
+    existing_root = find_dataset_root(input_path, splits)
+    if existing_root is not None:
+        return existing_root
+
+    # Accept the legacy case where a root-level ZIP was already extracted beside the
+    # requested wrapper directory (for example raw/train instead of raw/dataset/train).
+    if not input_path.exists() and has_requested_splits(input_path.parent, splits):
+        return input_path.parent
+
+    if input_path.is_file() and input_path.suffix.lower() == ".zip":
+        zip_path = input_path
+        extraction_dir = input_path.with_suffix("")
+    else:
+        zip_candidates = [
+            input_path.with_suffix(".zip"),
+            input_path / "Anti-UAV-RGBT.zip",
+            input_path.parent / "Anti-UAV-RGBT.zip",
+        ]
+        zip_path = next((path for path in zip_candidates if path.is_file()), None)
+        extraction_dir = input_path
+
+    extracted_root = find_dataset_root(extraction_dir, splits)
+    if extracted_root is not None:
+        return extracted_root
+
+    if zip_path is None:
+        raise FileNotFoundError(
+            f"Dataset splits {splits} and Anti-UAV-RGBT.zip were not found at {input_path}"
+        )
+
+    if extraction_dir.exists():
+        unrelated = [path for path in extraction_dir.iterdir() if path != zip_path]
+        if unrelated:
+            raise FileExistsError(
+                f"Refusing to merge archive contents into non-empty directory: {extraction_dir}"
+            )
+    else:
+        extraction_dir.mkdir(parents=True)
+
+    print(f"\n📦 Extracting {zip_path} to {extraction_dir}...")
+    destination = extraction_dir.resolve()
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        for member in archive.infolist():
+            if not (destination / member.filename).resolve().is_relative_to(destination):
+                raise ValueError(f"Unsafe path in ZIP archive: {member.filename}")
+        archive.extractall(extraction_dir)
+    print("  ✅ Extraction complete")
+
+    resolved_root = find_dataset_root(extraction_dir, splits)
+    if resolved_root is None:
+        raise FileNotFoundError(
+            f"Requested dataset splits {splits} were not found after extracting {zip_path}"
+        )
+    return resolved_root
 
 
 def parse_annotation_json(json_path: Path) -> dict:
@@ -601,31 +681,9 @@ def main():
     if args.max_frames is not None and args.max_frames <= 0:
         parser.error("--max-frames must be greater than zero")
 
-    # Check input exists
-    if not args.input.exists():
-        # Try to extract from zip
-        zip_path = args.input.with_suffix(".zip")
-        if not zip_path.exists():
-            zip_path = args.input.parent / "Anti-UAV-RGBT.zip"
-
-        if zip_path.exists():
-            print(f"\n📦 Extracting {zip_path}...")
-            import zipfile
-
-            with zipfile.ZipFile(zip_path, "r") as z:
-                z.extractall(args.input.parent)
-            print("  ✅ Extraction complete")
-        else:
-            print(f"\n❌ Error: Input not found: {args.input}")
-            print(f"   Also tried: {zip_path}")
-            sys.exit(1)
-
-    missing_splits = [
-        args.input / split for split in args.splits if not (args.input / split).is_dir()
-    ]
-    if missing_splits:
-        formatted = "\n  ".join(str(path) for path in missing_splits)
-        raise FileNotFoundError("Requested dataset splits are missing:\n  " + formatted)
+    input_dir = resolve_dataset_root(args.input, args.splits)
+    if input_dir != args.input:
+        print(f"  Resolved input: {input_dir}")
 
     prepare_output(args.output, args.overwrite)
 
@@ -634,7 +692,7 @@ def main():
     manifest_records: list[dict[str, object]] = []
     for split in args.splits:
         stats[split] = process_split(
-            args.input,
+            input_dir,
             args.output,
             split,
             args.modality,

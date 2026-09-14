@@ -287,18 +287,36 @@ This logic should not be rewritten merely because the detector framework changes
 
 ### 5.2 Data-source semantics
 
-Two Colab source archives have been verified by the user:
+The current locally audited Colab archive is the 5.6 GB `Anti-UAV-RGBT.zip` associated
+with Google Drive file `1VZFq7g-z5-k0VEkGLKW2i29RzGd47dRD`. It has no enclosing
+dataset directory: `train`, `val`, `test`, `label_new`, and `framecut.py` are directly
+at the ZIP root. It contains 160 train, 67 validation, and 91 test sequences. Every
+sequence has `infrared.mp4`, `infrared.json`, `visible.mp4`, and `visible.json`; the
+archive contains no JPEG sequence data.
 
-- `1F0nGafdWP4PddmqVDLFNpHmukEFRpX8Y` matches the RGBT video contract
-  (`infrared.mp4` + `infrared.json`, with the stated visible equivalents);
-- `1VZFq7g-z5-k0VEkGLKW2i29RzGd47dRD` extracts with `train` and `val` directly at its
-  root and contains both video sequences and benchmark-style IR sequences made of
-  numbered JPEGs plus `IR_label.json`.
+`label_new/{train,val,test}.json` maps every sequence to challenge-attribute codes; it
+is analysis metadata and is not needed to generate detector labels. `framecut.py` is a
+legacy all-frames MP4-to-JPEG utility and is superseded by `scripts/prepare_data.py` for
+the modern detector workflow.
 
-`scripts/prepare_data.py` accepts both IR representations per sequence. It prefers a
-complete video/annotation pair if both representations are present, otherwise it uses
-the JPEG representation. This project contract should not be confused with every
-public distribution bearing the Anti-UAV410 name.
+Google Drive file `1F0nGafdWP4PddmqVDLFNpHmukEFRpX8Y` was previously verified by the
+user as downloadable with the expected RGBT names, but its archive contents were not
+audited locally.
+
+The separate legacy Anti-UAV410 benchmark path in this repository uses numbered JPEGs
+plus `IR_label.json`. `scripts/prepare_data.py` accepts that representation for
+compatibility, but it is not part of the audited RGBT ZIP. A prior Colab directory with
+210 train and 93 validation folders had been formed by overlaying sources; those counts
+must not be treated as an archive contract.
+
+For either supported representation, the converter prefers a complete video/annotation
+pair if both are present. ZIP extraction resolves root-level or singly wrapped split
+directories and refuses to merge into a non-empty unrelated directory.
+
+All audited IR annotations have matching `exist` and `gt_rect` lengths. However, 179
+train, 72 validation, and 43 test frames say `exist=1` while supplying a zero-size box.
+Preparation records these contradictions as `invalid_bbox` rather than silently
+changing them to true target absence.
 
 The Anti-UAV domain representation contains more information than YOLO labels.
 
@@ -735,8 +753,8 @@ A future `notebooks/colab_train.ipynb` should contain:
 1. GPU/environment check;
 2. clone this GitHub repository;
 3. dependency installation;
-4. select and download one of the verified archives with `gdown`;
-5. extract to `/content` while preserving source videos and JPEGs;
+4. download the selected archive with `gdown`;
+5. extract to a fresh directory under `/content`, preserving all source media;
 6. path/config selection;
 7. call to data preparation;
 8. call to training;
