@@ -35,6 +35,7 @@ dependencies = [
     "seaborn>=0.12.0",
     "tensorboard>=2.14.0",
     "albumentations>=1.3.0",
+    "ultralytics>=8.4,<9",
 ]
 
 [project.optional-dependencies]
@@ -183,7 +184,10 @@ exclude = [
     "Codes",  # Legacy code - gradually migrate
     "src/tracking",  # Legacy tracking code - needs refactoring
     "src/evaluation/toolkit",  # Legacy evaluation toolkit
-    "src/detection",  # Legacy detection code
+    "src/detection/detect.py",  # Legacy detection code
+    "src/detection/detector.py",  # Legacy detection code
+    "src/detection/models",
+    "src/detection/utils",
 ]
 # Lenient settings for legacy codebase
 reportMissingImports = false

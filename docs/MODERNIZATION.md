@@ -434,6 +434,30 @@ M2 passes when:
 - new detector code does not import copied `models.*` / `utils.*`;
 - old detector remains available for still-unmigrated legacy paths during the transition.
 
+## Implemented M2 boundary
+
+The modern boundary lives in:
+
+```text
+src/detection/results.py
+src/detection/ultralytics_adapter.py
+```
+
+`Detection` contains only absolute `xyxy` coordinates, confidence, and class ID.
+`UltralyticsDetector` loads an Ultralytics model and accepts one image or video frame per
+call, returning `Detection[]`. Keeping prediction frame-based avoids losing frame identity
+when later video inference is implemented in M4.
+
+Ultralytics is constrained to `>=8.4,<9` for the prototype path. It remains an R&D
+dependency rather than a final commercial licensing decision. The adapter imports
+Ultralytics only when a model is constructed, so importing the project-owned detection
+shape does not initialize the framework or load a model.
+
+The module names deliberately avoid `types.py` and `ultralytics.py`: legacy entry points
+still prepend `src/detection` to `sys.path`, so those generic names could shadow Python's
+standard `types` module or the third-party `ultralytics` package before M4 removes the path
+mutation.
+
 ## Delete gate
 
 No legacy detector deletion yet.

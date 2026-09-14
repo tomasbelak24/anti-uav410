@@ -870,8 +870,8 @@ anti-uav410/
 │   └── export.py                # supported export wrapper
 ├── src/
 │   ├── detection/
-│   │   ├── types.py
-│   │   └── ultralytics.py
+│   │   ├── results.py
+│   │   └── ultralytics_adapter.py
 │   ├── tracking/                # temporarily preserved
 │   └── evaluation/
 │       └── toolkit/             # temporarily preserved
