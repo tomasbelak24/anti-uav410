@@ -167,7 +167,7 @@ markers = [
 [tool.pyright]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
-include = ["src", "scripts/train.py", "tests"]
+include = ["src", "scripts/train.py", "scripts/infer.py", "tests"]
 exclude = [
     "**/__pycache__",
     ".venv",

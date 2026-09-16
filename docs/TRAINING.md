@@ -110,6 +110,6 @@ The one-epoch GPU run is manual validation. Automated tests mock the heavy libra
 
 ## Current migration boundary
 
-Detector inference remains legacy until M4. Standalone detector validation and export
-remain legacy until M5. Tracker integration and Anti-UAV benchmark evaluation are not
-changed by M3.
+Detector training and standalone inference now use the modern path. Detector validation
+and export remain legacy until M5. Tracker integration and Anti-UAV benchmark evaluation
+have not changed.

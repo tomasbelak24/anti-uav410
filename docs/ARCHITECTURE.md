@@ -102,17 +102,13 @@ Current path:
 ```text
 scripts/train.py
        │
-       ├── inserts `src/detection` into sys.path
-       ├── imports `models.*`
-       ├── imports `utils.*`
-       ├── constructs YOLO model
-       ├── owns data loader
-       ├── owns loss/optimizer/scheduler
-       ├── owns checkpointing
-       └── calls legacy validation
+       ├── reads a small project config plus CLI overrides
+       ├── selects dataset/model/run output
+       └── calls public `ultralytics.YOLO.train`
 ```
 
-This is primarily **generic YOLO framework code** and should be replaced.
+Generic training machinery is now owned by Ultralytics. Historical detector copies
+remain only for paths that have not crossed their delete gates.
 
 ### 3.3 Detector inference
 
@@ -121,15 +117,13 @@ Current path:
 ```text
 scripts/infer.py
        │
-       ├── inserts `src/detection` into sys.path
-       ├── imports `models.experimental.attempt_load`
-       ├── imports legacy image/stream loaders
-       ├── imports NMS
-       ├── imports coordinate scaling / plotting
-       └── performs detector inference
+       ├── selects weights/source/thresholds/output
+       ├── calls public `ultralytics.YOLO.predict` with streaming enabled
+       ├── lets Ultralytics save annotated media
+       └── converts every result to project `Detection[]`
 ```
 
-This is generic detector-framework behavior and should be replaced.
+Generic source loading, NMS, plotting, and media writing are now owned by Ultralytics.
 
 ### 3.4 Detector evaluation
 
@@ -543,11 +537,11 @@ are not consumed by the modern entry point.
 
 ## 8. Inference architecture
 
-### 8.1 Current `scripts/infer.py`
+### 8.1 Historical `scripts/infer.py` before M4
 
-**Disposition: REPLACE**
+**Disposition: REPLACED**
 
-It currently owns:
+It owned:
 
 - loading legacy checkpoints;
 - image/video stream loading;
@@ -575,6 +569,16 @@ annotated output
 Internally, generic detector work belongs to the external library.
 
 For integration code, normalize output into `Detection[]`.
+
+### 8.3 Current `scripts/infer.py`
+
+The supported entry point accepts one model, an image/video/directory/stream source,
+confidence and IoU thresholds, image size, device, and an explicit output directory.
+It uses Ultralytics streaming prediction so long videos are not accumulated in memory.
+
+Annotated media saving remains a library responsibility. Each returned frame is also
+converted through `detections_from_result`, and `iter_detection_frames` exposes the
+result as project-owned `Detection[]` for later tracker integration.
 
 ---
 

@@ -667,6 +667,24 @@ M4 passes when:
 - annotated output can be produced;
 - integration code can receive `Detection[]`.
 
+## Implemented M4 inference path
+
+`scripts/infer.py` now delegates source loading, model execution, NMS, annotation, and
+media saving to the public `ultralytics.YOLO.predict` API. It retains only the useful
+project interface: weights, source, output directory, image size, confidence/IoU
+thresholds, and device.
+
+Prediction uses `stream=True`, so image directories and long videos are processed one
+result at a time. `iter_detection_frames` converts every result through the M2 boundary
+and yields framework-independent `Detection[]`; the command consumes that stream while
+reporting frame and detection totals. The output directory maps directly to Ultralytics
+`project` plus `name` with `exist_ok=True`, avoiding the old script's destructive removal
+of the entire output directory.
+
+Focused tests cover CLI validation, threshold/device/output forwarding, empty frames,
+frame/detection counts, lazy framework imports, and absence of copied detector imports.
+The root `demo_ui.py` and detector+tracker demos remain explicitly legacy.
+
 ## Delete gate
 
 Still do not delete all old detector code. Detector validation/export and tracker

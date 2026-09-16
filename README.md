@@ -1,6 +1,7 @@
 # Anti-UAV: Detection and Tracking
 
-A deep learning toolkit for UAV (drone) detection and tracking using YOLOv5 and Siamese networks, with support for both RGB and thermal infrared video.
+A UAV (drone) detection and tracking project with a modern Ultralytics detector path and
+preserved Anti-UAV tracking code, supporting RGB and thermal infrared video.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -12,10 +13,10 @@ A deep learning toolkit for UAV (drone) detection and tracking using YOLOv5 and 
 
 ## Features
 
-- **YOLOv5 Detection**: Real-time UAV detection optimized for small aerial targets
+- **Modern Detection**: Ultralytics-based detector training and inference
 - **Siamese Tracking**: Robust single-object tracking with occlusion handling
 - **Multi-Modal**: Support for RGB and thermal infrared (IR) imagery
-- **GPU Accelerated**: CUDA 12.1 support with PyTorch 2.0+
+- **GPU Accelerated**: Uses the Torch/CUDA environment available on the target machine
 - **Modern Tooling**: Uses `uv` for fast, reproducible dependency management
 
 ## Quick Start
@@ -82,9 +83,13 @@ tensorboard --logdir runs/train
 # Run detection on video
 uv run python scripts/infer.py \
     --weights runs/train/drone_v1/weights/best.pt \
-    --source path/to/video.mp4
+    --source path/to/video.mp4 \
+    --output runs/detect/drone_v1 \
+    --device 0
 
-# Run detection + tracking
+# Annotated media is written inside runs/detect/drone_v1.
+
+# Legacy detection + tracking path (modern integration is a later milestone)
 uv run python Codes/demo_detect_track.py \
     --video path/to/video.mp4 \
     --detector runs/train/drone_v1/weights/best.pt
@@ -103,7 +108,8 @@ anti-uav410/
 │       └── drtracker/          # Alternative tracker
 ├── scripts/                    # Training & utility scripts
 │   ├── prepare_data.py         # Dataset conversion
-│   ├── train.py                # Training script
+│   ├── train.py                # Modern detector training
+│   ├── infer.py                # Modern image/video inference
 │   ├── evaluate.py             # Evaluation script
 │   └── export.py               # Model export (ONNX, TensorRT)
 ├── configs/                    # Configuration files
