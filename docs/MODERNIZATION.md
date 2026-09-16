@@ -577,6 +577,25 @@ M3 passes when:
 - resume is represented;
 - the old training loop is no longer the supported default.
 
+## Implemented M3 training path
+
+`scripts/train.py` now owns only project-relevant configuration and delegates training to
+the public `ultralytics.YOLO.train` API. The default experiment lives in
+`configs/training/anti_uav_baseline.yaml`; CLI values override that small configuration.
+
+New runs forward the dataset, model, epochs, image size, batch, device, workers, project,
+and name. Resume loads the supplied `last.pt` and forwards `resume=True`, leaving optimizer,
+scheduler, and epoch restoration to Ultralytics.
+
+The obsolete legacy training smoke test was replaced with mocked tests of the supported
+entry point. The historical detector copies remain present because inference and tracker
+integration have not migrated yet.
+
+The modern package metadata supports Python 3.10-3.13. The obsolete UV-only Torch
+2.5.1/CUDA 12.1 source pin was removed because it had no Python 3.13 build; the lock now
+resolves a Python 3.13-capable Torch stack. Colab may keep its preinstalled GPU-enabled
+Torch and install this project with `--no-deps`.
+
 ## Delete gate
 
 Do not delete the full old detector framework merely because training was replaced.

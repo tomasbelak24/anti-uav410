@@ -479,9 +479,9 @@ YOLOX ───────┘
 
 ## 7. Training architecture
 
-### 7.1 Current `scripts/train.py`
+### 7.1 Historical `scripts/train.py` before M3
 
-**Disposition: REPLACE**
+**Disposition: REPLACED**
 
 The current training script owns generic detector-framework concerns such as:
 
@@ -499,9 +499,9 @@ The current training script owns generic detector-framework concerns such as:
 
 Those responsibilities should not remain project-owned.
 
-### 7.2 Target `scripts/train.py`
+### 7.2 Current `scripts/train.py`
 
-The replacement should be a thin project entry point responsible for:
+The replacement is a thin project entry point responsible for:
 
 - parsing project-relevant arguments/config;
 - selecting model/checkpoint;
@@ -511,7 +511,8 @@ The replacement should be a thin project entry point responsible for:
 - invoking the maintained public training API;
 - reporting where artifacts are written.
 
-It should not duplicate the external library's training loop.
+It delegates the training loop to `ultralytics.YOLO.train` and does not import copied
+`models.*` or `utils.*` modules.
 
 ### 7.3 Configuration
 
@@ -533,6 +534,10 @@ output root
 ```
 
 Do not migrate every historical YOLO flag simply because the old script exposes it.
+
+The supported baseline configuration is `configs/training/anti_uav_baseline.yaml`.
+Historical `default.yaml` and `finetune.yaml` files remain only for legacy reference and
+are not consumed by the modern entry point.
 
 ---
 

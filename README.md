@@ -66,11 +66,10 @@ uv run python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 ```bash
 # Basic training
 uv run python scripts/train.py \
-    --img 640 \
+    --imgsz 640 \
     --batch 16 \
     --epochs 100 \
     --data data/processed/drone.yaml \
-    --weights yolov5s.pt \
     --name drone_v1
 
 # Monitor with TensorBoard
@@ -133,16 +132,13 @@ uv sync
 
 # Train
 uv run python scripts/train.py \
-    --img 640 --batch 16 --epochs 100 \
+    --imgsz 640 --batch 16 --epochs 100 \
     --data data/processed/drone.yaml \
-    --weights yolov5s.pt
+    --name drone_v1
 ```
 
-See [docs/TRAINING.md](docs/TRAINING.md) for the complete training guide including:
-- GPU selection and cost estimation
-- Hyperparameter tuning
-- Multi-GPU training
-- Model export for deployment
+See [docs/TRAINING.md](docs/TRAINING.md) for the supported baseline, Colab setup,
+checkpoint artifacts, and resume workflow.
 
 ## Model Export
 
