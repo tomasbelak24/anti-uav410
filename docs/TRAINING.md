@@ -40,8 +40,9 @@ python scripts/train.py --data data/processed/drone.yaml
 ```
 
 The baseline starts from `yolo11n.pt`, trains at 640 pixels with batch size 16, and
-writes under `runs/train/anti-uav-baseline`. Ultralytics may append a number rather than
-overwrite an existing run directory.
+writes under `runs/train/anti-uav-baseline`. Relative project paths are resolved against
+the repository root, and named runs reuse that exact directory instead of silently
+becoming `anti-uav-baseline2`, `anti-uav-baseline3`, and so on.
 
 Useful overrides are intentionally limited:
 
@@ -53,7 +54,7 @@ Useful overrides are intentionally limited:
 --device      0, cpu, mps, and other Ultralytics-supported values
 --workers     data-loader workers
 --project     output root
---name        run name
+--name        plain run name (not a path)
 ```
 
 The script prints the effective configuration before calling Ultralytics. Framework

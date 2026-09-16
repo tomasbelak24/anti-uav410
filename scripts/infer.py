@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.detection import Detection
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the supported M4 inference command."""
@@ -77,6 +79,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def _prediction_options(args: argparse.Namespace) -> dict[str, Any]:
     """Translate project arguments to the public Ultralytics predict API."""
     output = args.output.expanduser()
+    if not output.is_absolute():
+        output = PROJECT_ROOT / output
+    output = output.resolve()
     options: dict[str, Any] = {
         "source": args.source,
         "imgsz": args.imgsz,
@@ -100,16 +105,24 @@ def iter_detection_frames(args: argparse.Namespace) -> Iterator[list[Detection]]
 
     from src.detection import detections_from_result
 
-    model = YOLO(str(args.weights))
+    weights = args.weights.expanduser()
+    if not weights.is_absolute() and weights.parent != Path("."):
+        weights = (PROJECT_ROOT / weights).resolve()
+
+    model = YOLO(str(weights))
     for result in model.predict(**_prediction_options(args)):
         yield detections_from_result(result)
 
 
 def run_inference(args: argparse.Namespace) -> tuple[int, int]:
     """Run inference and return the processed frame and detection counts."""
+    output = args.output.expanduser()
+    if not output.is_absolute():
+        output = (PROJECT_ROOT / output).resolve()
+
     print(f"Model:  {args.weights}")
     print(f"Source: {args.source}")
-    print(f"Output: {args.output.expanduser()}")
+    print(f"Output: {output}")
 
     frame_count = 0
     detection_count = 0
@@ -118,7 +131,7 @@ def run_inference(args: argparse.Namespace) -> tuple[int, int]:
         detection_count += len(detections)
 
     print(f"Processed {frame_count} frame(s), found {detection_count} detection(s)")
-    print(f"Annotated output: {args.output.expanduser()}")
+    print(f"Annotated output: {output}")
     return frame_count, detection_count
 
 

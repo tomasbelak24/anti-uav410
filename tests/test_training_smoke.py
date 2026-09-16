@@ -84,8 +84,9 @@ def test_new_training_forwards_supported_arguments(
         batch=4,
         device="cpu",
         workers=0,
-        project="outputs",
+        project=str((train.PROJECT_ROOT / "outputs").resolve()),
         name="smoke",
+        exist_ok=True,
     )
     assert result == "metrics"
 
@@ -119,6 +120,21 @@ def test_resume_loads_checkpoint_and_uses_library_resume(
 def test_new_training_requires_dataset(training_config: Path) -> None:
     with pytest.raises(SystemExit):
         train.parse_args(["--config", str(training_config)])
+
+
+@pytest.mark.parametrize("name", ["runs/train/smoke", "runs\\train\\smoke", ".", ".."])
+def test_training_name_must_not_be_a_path(training_config: Path, name: str) -> None:
+    with pytest.raises(SystemExit):
+        train.parse_args(
+            [
+                "--config",
+                str(training_config),
+                "--data",
+                "prepared/drone.yaml",
+                "--name",
+                name,
+            ]
+        )
 
 
 def test_help_does_not_import_ultralytics(monkeypatch: pytest.MonkeyPatch) -> None:

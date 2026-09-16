@@ -107,7 +107,7 @@ def test_streaming_inference_saves_output_and_yields_detections(
         iou=0.5,
         stream=True,
         save=True,
-        project="runs/detect",
+        project=str((infer.PROJECT_ROOT / "runs/detect").resolve()),
         name="demo",
         exist_ok=True,
         verbose=False,

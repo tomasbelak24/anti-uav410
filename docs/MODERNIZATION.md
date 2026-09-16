@@ -587,6 +587,11 @@ New runs forward the dataset, model, epochs, image size, batch, device, workers,
 and name. Resume loads the supplied `last.pt` and forwards `resume=True`, leaving optimizer,
 scheduler, and epoch restoration to Ultralytics.
 
+Relative project paths are resolved against the repository root, run names are rejected
+if they contain path separators, and named runs forward `exist_ok=True`. These safeguards
+keep `runs/train/anti-uav-smoke` deterministic across Colab reruns and avoid Ultralytics
+prefixing a relative project into `runs/detect/runs/train/...`.
+
 The obsolete legacy training smoke test was replaced with mocked tests of the supported
 entry point. The historical detector copies remain present because inference and tracker
 integration have not migrated yet.
@@ -678,8 +683,9 @@ Prediction uses `stream=True`, so image directories and long videos are processe
 result at a time. `iter_detection_frames` converts every result through the M2 boundary
 and yields framework-independent `Detection[]`; the command consumes that stream while
 reporting frame and detection totals. The output directory maps directly to Ultralytics
-`project` plus `name` with `exist_ok=True`, avoiding the old script's destructive removal
-of the entire output directory.
+`project` plus `name` with `exist_ok=True`. Relative output paths are anchored to the
+repository root before that split, avoiding both Ultralytics path prefixing and the old
+script's destructive removal of the entire output directory.
 
 Focused tests cover CLI validation, threshold/device/output forwarding, empty frames,
 frame/detection counts, lazy framework imports, and absence of copied detector imports.

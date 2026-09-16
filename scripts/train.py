@@ -81,6 +81,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error("--project is required for a new training run")
         if not args.name:
             parser.error("--name is required for a new training run")
+        if args.name in {".", ".."} or "/" in args.name or "\\" in args.name:
+            parser.error("--name must be a plain run name, not a path")
 
         for key in ("epochs", "imgsz", "batch", "workers"):
             value = getattr(args, key)
@@ -109,14 +111,18 @@ def run_training(args: argparse.Namespace) -> Any:
             train_options["device"] = args.device
     else:
         model_source = str(args.model)
+        project = Path(args.project).expanduser()
+        if not project.is_absolute():
+            project = PROJECT_ROOT / project
         train_options = {
             "data": str(args.data),
             "epochs": args.epochs,
             "imgsz": args.imgsz,
             "batch": args.batch,
             "workers": args.workers,
-            "project": str(args.project),
+            "project": str(project.resolve()),
             "name": args.name,
+            "exist_ok": True,
         }
         if args.device is not None:
             train_options["device"] = args.device

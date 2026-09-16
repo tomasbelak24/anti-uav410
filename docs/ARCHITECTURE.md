@@ -505,6 +505,10 @@ The replacement is a thin project entry point responsible for:
 - invoking the maintained public training API;
 - reporting where artifacts are written.
 
+Relative training project paths are anchored to the repository root before they reach
+Ultralytics. Run names are single path components, and `exist_ok=True` prevents the
+library from silently incrementing an explicitly named run directory.
+
 It delegates the training loop to `ultralytics.YOLO.train` and does not import copied
 `models.*` or `utils.*` modules.
 
@@ -575,6 +579,10 @@ For integration code, normalize output into `Detection[]`.
 The supported entry point accepts one model, an image/video/directory/stream source,
 confidence and IoU thresholds, image size, device, and an explicit output directory.
 It uses Ultralytics streaming prediction so long videos are not accumulated in memory.
+
+Relative output directories are converted to absolute repository-root paths before
+calling Ultralytics. This prevents a requested `runs/detect/example` from being prefixed
+again as `runs/detect/runs/detect/example` by library-level run-directory defaults.
 
 Annotated media saving remains a library responsibility. Each returned frame is also
 converted through `detections_from_result`, and `iter_detection_frames` exposes the
